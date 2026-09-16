@@ -1,20 +1,35 @@
 #!/usr/bin/env python3
 """
-Разбор и сборка контейнеров .epk (магия ".epk", версия 2).
+Разбор и сборка контейнеров .epk головного устройства Infiniti Q50.
 
-ВАЖНО: формат восстановлен наблюдением за одним файлом, а не по спецификации.
-Смещения могут отличаться в других версиях — все они переопределяются ключами
-командной строки.
+Раскладка подтверждена двумя независимыми источниками:
 
-Содержимое контейнера зашифровано. Ключа в самом файле нет, без него извлечь
-вложенный APK невозможно — это не обход защиты, а арифметика: шифр на то и шифр.
-Инструмент готов к моменту, когда ключ найдётся (в прошивке ГУ или в утилите
-упаковки).
+1. Имена и порядок полей конверта — из декомпилированного парсера IVI
+   com.connexis.ivi.utils.epk.v2, класс EpkParseResult.EpkEntry.Envelope
+   (проект oneezeeroo/Q50-Reverse-Engineering).
+2. Точные смещения и длины — разбором образца gtr.epk: заявленная длина
+   нагрузки сходится с размером файла до байта.
+
+    0x000   4     m_magicCode    ".epk"
+    0x004   2     m_version      u16 BE
+    0x006   2     m_payloadType  u16 BE
+    0x008   2     m_blockCount   u16 BE — число записей
+    0x00A   2     m_keySize      u16 BE — значащих байт в m_key
+    0x00C   256   m_key[256]     буфер фиксированной длины
+    ------------- конец конверта, 268 байт
+    0x10C   128   имя вложенного файла, ASCIIZ
+    0x18C   4     длина нагрузки, u32 BE
+    0x190   ...   нагрузка
+
+Нагрузка зашифрована. m_keySize = 128 байт = 1024 бита — это размер
+шифротекста RSA-1024, то есть симметричный ключ завёрнут в RSA и лежит прямо
+в файле. Чтобы его развернуть, нужен ЗАКРЫТЫЙ ключ RSA из прошивки ГУ.
 
 Примеры:
     epktool.py info gtr.epk
-    epktool.py extract gtr.epk -o payload.bin
-    epktool.py extract gtr.epk -o gtr.apk --key <hex> --mode cbc --iv <hex>
+    epktool.py extract gtr.epk -o payload.bin          # сырая нагрузка
+    epktool.py extract gtr.epk -o gtr.apk --rsa-key ivi-private.pem
+    epktool.py extract gtr.epk -o gtr.apk --key <hex> --mode cbc
     epktool.py pack q50info.apk -o q50info.epk --name q50info.apk
 """
 
@@ -23,109 +38,151 @@ import struct
 import sys
 
 MAGIC = b'.epk'
-
-# Смещения, выведенные из разбора gtr.epk (2 156 912 байт).
-OFF_SIG = 0x00C        # подпись, длину берём из заголовка
-OFF_SLOT2 = 0x08C      # второе поле того же размера, в образце всё нулевое
-OFF_NAME = 0x10C       # имя вложенного файла, ASCIIZ
-DEFAULT_PAYLOAD = 0x180
+ENVELOPE_SIZE = 0x10C
+OFF_KEY = 0x00C
+KEY_FIELD = 256
+NAME_FIELD = 128
 
 
-def parse_header(data):
+def parse(data):
     if data[:4] != MAGIC:
         raise ValueError('не контейнер .epk: магия %r вместо %r' % (data[:4], MAGIC))
-    v1, v2, v3, siglen = struct.unpack_from('>HHHH', data, 4)
-    name_end = data.index(b'\x00', OFF_NAME)
+    version, payload_type, blocks, key_size = struct.unpack_from('>HHHH', data, 4)
+    name_off = ENVELOPE_SIZE
+    len_off = name_off + NAME_FIELD
+    data_off = len_off + 4
     return {
-        'version': (v1, v2, v3),
-        'siglen': siglen,
-        'signature': data[OFF_SIG:OFF_SIG + siglen],
-        'slot2': data[OFF_SLOT2:OFF_SLOT2 + siglen],
-        'name': data[OFF_NAME:name_end].decode('ascii', 'replace'),
+        'version': version,
+        'payload_type': payload_type,
+        'block_count': blocks,
+        'key_size': key_size,
+        'key': data[OFF_KEY:OFF_KEY + key_size],
+        'key_padding_clean': not any(data[OFF_KEY + key_size:OFF_KEY + KEY_FIELD]),
+        'name': data[name_off:data.index(b'\x00', name_off)].decode('ascii', 'replace'),
+        'declared_len': struct.unpack_from('>I', data, len_off)[0],
+        'data_off': data_off,
     }
 
 
 def cmd_info(args):
     data = open(args.file, 'rb').read()
-    h = parse_header(data)
-    print('файл:            %s (%d байт)' % (args.file, len(data)))
-    print('версия:          %d.%d.%d' % h['version'])
-    print('длина подписи:   %d байт (%d бит — похоже на RSA-%d)'
-          % (h['siglen'], h['siglen'] * 8, h['siglen'] * 8))
-    print('вложенное имя:   %s' % h['name'])
-    print('подпись:         %s…' % h['signature'][:16].hex())
-    print('второе поле:     %s' % ('всё нули (не используется)'
-                                   if not any(h['slot2']) else h['slot2'][:16].hex() + '…'))
+    h = parse(data)
+    print('файл:           %s (%d байт)' % (args.file, len(data)))
+    print()
+    print('== КОНВЕРТ ==')
+    print('  m_version     = %d' % h['version'])
+    print('  m_payloadType = %d' % h['payload_type'])
+    print('  m_blockCount  = %d' % h['block_count'])
+    print('  m_keySize     = %d байт (%d бит)%s'
+          % (h['key_size'], h['key_size'] * 8,
+             '  — размер шифротекста RSA-1024' if h['key_size'] == 128 else ''))
+    print('  m_key         = %s…' % h['key'][:16].hex())
+    print('  добивка ключа = %s' % ('нули, как и ожидалось' if h['key_padding_clean']
+                                    else 'НЕ нули — раскладка может отличаться'))
+    print()
+    print('== ЗАПИСЬ ==')
+    print('  имя файла     = %s' % h['name'])
+    print('  длина         = %d байт, данные с 0x%X' % (h['declared_len'], h['data_off']))
 
-    body = data[args.payload:]
-    print('нагрузка:        с 0x%03x, %d байт, кратна 16: %s'
-          % (args.payload, len(body), len(body) % 16 == 0))
+    actual = len(data) - h['data_off']
+    ok = actual == h['declared_len']
+    print('  сверка длины  = %s (в файле %d)'
+          % ('СОВПАДАЕТ' if ok else 'РАСХОЖДЕНИЕ', actual))
+    print('  кратна 16     = %s' % (h['declared_len'] % 16 == 0))
 
-    zip_sigs = [s for s in (b'PK\x03\x04', b'PK\x01\x02', b'PK\x05\x06') if s in data]
-    print('признаки ZIP:    %s' % (', '.join(s.hex() for s in zip_sigs) if zip_sigs
-                                   else 'нет — содержимое НЕ является открытым APK'))
-
+    body = data[h['data_off']:h['data_off'] + h['declared_len']]
+    print()
+    print('== НАГРУЗКА ==')
+    zips = [s for s in (b'PK\x03\x04', b'PK\x01\x02', b'PK\x05\x06') if s in body]
+    print('  признаки ZIP  = %s' % (', '.join(s.hex() for s in zips) if zips
+                                    else 'нет — зашифровано'))
     import collections, math
     c = collections.Counter(body)
     ent = -sum((n / len(body)) * math.log2(n / len(body)) for n in c.values())
-    print('энтропия:        %.3f из 8.0 %s' % (ent, '(зашифровано)' if ent > 7.9 else ''))
-
+    print('  энтропия      = %.3f из 8.0' % ent)
     blocks = [body[i:i + 16] for i in range(0, len(body) - 15, 16)]
     dups = len(blocks) - len(set(blocks))
-    print('повторы блоков:  %d %s' % (dups, '(режим ECB)' if dups > 10 else '(CBC/CTR или поточный шифр)'))
+    print('  повторы бл.   = %d %s' % (dups, '(ECB)' if dups > 10 else '(не ECB)'))
 
 
-def crypt(body, args, encrypt):
+def unwrap_key(wrapped, pem_path, padding_name):
+    """Развернуть симметричный ключ закрытым ключом RSA из прошивки."""
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding as pad
+    priv = serialization.load_pem_private_key(open(pem_path, 'rb').read(), password=None)
+    scheme = (pad.PKCS1v15() if padding_name == 'pkcs1v15'
+              else pad.OAEP(mgf=pad.MGF1(hashes.SHA1()), algorithm=hashes.SHA1(), label=None))
+    key = priv.decrypt(wrapped, scheme)
+    print('ключ развёрнут: %d байт (AES-%d)' % (len(key), len(key) * 8))
+    return key
+
+
+def aes(body, key, mode_name, iv, encrypt):
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    key = bytes.fromhex(args.key)
-    iv = bytes.fromhex(args.iv) if args.iv else b'\x00' * 16
-    mode = {'cbc': modes.CBC, 'ecb': None, 'ctr': modes.CTR,
-            'cfb': modes.CFB, 'ofb': modes.OFB}[args.mode]
-    m = modes.ECB() if args.mode == 'ecb' else mode(iv)
-    c = Cipher(algorithms.AES(key), m).encryptor() if encrypt \
-        else Cipher(algorithms.AES(key), m).decryptor()
-    return c.update(body) + c.finalize()
+    m = {'ecb': lambda: modes.ECB(), 'cbc': lambda: modes.CBC(iv),
+         'ctr': lambda: modes.CTR(iv), 'cfb': lambda: modes.CFB(iv),
+         'ofb': lambda: modes.OFB(iv)}[mode_name]()
+    c = Cipher(algorithms.AES(key), m)
+    op = c.encryptor() if encrypt else c.decryptor()
+    return op.update(body) + op.finalize()
+
+
+def resolve_key(h, args):
+    if args.rsa_key:
+        return unwrap_key(h['key'], args.rsa_key, args.rsa_padding)
+    if args.key:
+        return bytes.fromhex(args.key)
+    return None
 
 
 def cmd_extract(args):
     data = open(args.file, 'rb').read()
-    h = parse_header(data)
-    body = data[args.payload:]
-    if args.key:
+    h = parse(data)
+    body = data[h['data_off']:h['data_off'] + h['declared_len']]
+
+    key = resolve_key(h, args)
+    if key:
+        iv = bytes.fromhex(args.iv) if args.iv else b'\x00' * 16
         if args.mode in ('cbc', 'ecb') and len(body) % 16:
-            sys.exit('длина нагрузки %d не кратна 16 — для режима %s нужно '
-                     'подобрать --payload' % (len(body), args.mode))
-        body = crypt(body, args, encrypt=False)
+            sys.exit('длина %d не кратна 16 — режим %s не подойдёт' % (len(body), args.mode))
+        body = aes(body, key, args.mode, iv, encrypt=False)
+
     out = args.output or h['name']
     open(out, 'wb').write(body)
     print('записано %d байт в %s' % (len(body), out))
     if body[:4] == b'PK\x03\x04':
         print('начинается с PK\\x03\\x04 — это ZIP/APK, расшифровка удалась')
-    elif args.key:
-        print('на ZIP не похоже: ключ, режим или IV не те')
+    elif key:
+        print('на ZIP не похоже: не тот ключ, режим или IV')
+    else:
+        print('ключ не задан — это сырой шифротекст')
 
 
 def cmd_pack(args):
     payload = open(args.file, 'rb').read()
     if args.key:
+        key = bytes.fromhex(args.key)
         if args.mode in ('cbc', 'ecb') and len(payload) % 16:
             payload += b'\x00' * (16 - len(payload) % 16)
-        payload = crypt(payload, args, encrypt=True)
+        payload = aes(payload, key, args.mode,
+                      bytes.fromhex(args.iv) if args.iv else b'\x00' * 16, encrypt=True)
 
     name = (args.name or args.file.split('/')[-1]).encode('ascii')
-    siglen = args.siglen
-    head = bytearray(args.payload)
-    head[0:4] = MAGIC
-    struct.pack_into('>HHHH', head, 4, *args.version, siglen)
-    # Поле подписи оставляем нулевым: закрытого ключа нет. Если ГУ подпись
-    # проверяет, такой пакет оно отвергнет.
-    head[OFF_NAME:OFF_NAME + len(name)] = name
+    if len(name) >= NAME_FIELD:
+        sys.exit('имя длиннее %d байт' % (NAME_FIELD - 1))
 
-    open(args.output, 'wb').write(bytes(head) + payload)
+    out = bytearray(ENVELOPE_SIZE + NAME_FIELD + 4)
+    out[0:4] = MAGIC
+    struct.pack_into('>HHHH', out, 4, args.version, args.payload_type, 1, args.key_size)
+    # m_key оставляем нулевым: завернуть симметричный ключ можно только
+    # ОТКРЫТЫМ ключом IVI, которого нет.
+    out[ENVELOPE_SIZE:ENVELOPE_SIZE + len(name)] = name
+    struct.pack_into('>I', out, ENVELOPE_SIZE + NAME_FIELD, len(payload))
+
+    open(args.output, 'wb').write(bytes(out) + payload)
     print('собрано %s: заголовок %d + нагрузка %d = %d байт'
-          % (args.output, len(head), len(payload), len(head) + len(payload)))
-    print('ВНИМАНИЕ: поле подписи нулевое. Если устройство проверяет подпись, '
-          'пакет будет отвергнут.')
+          % (args.output, len(out), len(payload), len(out) + len(payload)))
+    print('ВНИМАНИЕ: поле m_key нулевое. Устройство почти наверняка отвергнет пакет.')
 
 
 def main():
@@ -133,31 +190,31 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
 
-    def crypto_args(sp):
-        sp.add_argument('--key', help='ключ AES в hex (32 симв. = AES-128, 64 = AES-256)')
+    def crypto(sp):
+        sp.add_argument('--key', help='симметричный ключ AES в hex, если он уже известен')
+        sp.add_argument('--rsa-key', help='закрытый ключ RSA (PEM) для разворота m_key')
+        sp.add_argument('--rsa-padding', default='pkcs1v15', choices=['pkcs1v15', 'oaep'])
         sp.add_argument('--iv', help='IV в hex, по умолчанию нули')
         sp.add_argument('--mode', default='cbc', choices=['cbc', 'ecb', 'ctr', 'cfb', 'ofb'])
 
     sp = sub.add_parser('info', help='разобрать заголовок')
     sp.add_argument('file')
-    sp.add_argument('--payload', type=lambda x: int(x, 0), default=DEFAULT_PAYLOAD)
     sp.set_defaults(func=cmd_info)
 
     sp = sub.add_parser('extract', help='извлечь нагрузку')
     sp.add_argument('file')
     sp.add_argument('-o', '--output')
-    sp.add_argument('--payload', type=lambda x: int(x, 0), default=DEFAULT_PAYLOAD)
-    crypto_args(sp)
+    crypto(sp)
     sp.set_defaults(func=cmd_extract)
 
-    sp = sub.add_parser('pack', help='упаковать файл в контейнер .epk')
+    sp = sub.add_parser('pack', help='собрать контейнер')
     sp.add_argument('file')
     sp.add_argument('-o', '--output', required=True)
-    sp.add_argument('--name', help='имя вложенного файла в заголовке')
-    sp.add_argument('--payload', type=lambda x: int(x, 0), default=DEFAULT_PAYLOAD)
-    sp.add_argument('--siglen', type=int, default=128)
-    sp.add_argument('--version', type=int, nargs=3, default=[2, 2, 1])
-    crypto_args(sp)
+    sp.add_argument('--name')
+    sp.add_argument('--version', type=int, default=2)
+    sp.add_argument('--payload-type', type=int, default=2)
+    sp.add_argument('--key-size', type=int, default=128)
+    crypto(sp)
     sp.set_defaults(func=cmd_pack)
 
     args = p.parse_args()
