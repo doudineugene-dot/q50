@@ -185,6 +185,56 @@ def cmd_pack(args):
     print('ВНИМАНИЕ: поле m_key нулевое. Устройство почти наверняка отвергнет пакет.')
 
 
+def cmd_compare(args):
+    """Сравнить два контейнера: раскладку и признаки слабостей в шифровании."""
+    import collections, math
+
+    def entropy(x):
+        c = collections.Counter(x)
+        return -sum((n / len(x)) * math.log2(n / len(x)) for n in c.values())
+
+    a, b = open(args.file_a, 'rb').read(), open(args.file_b, 'rb').read()
+    ha, hb = parse(a), parse(b)
+
+    print('== КОНВЕРТЫ ==')
+    for field in ('version', 'payload_type', 'block_count', 'key_size'):
+        va, vb = ha[field], hb[field]
+        print('  %-13s %-8s %-8s %s' % (field, va, vb, 'одинаково' if va == vb else 'РАЗЛИЧАЮТСЯ'))
+    print('  %-13s %-8s %-8s' % ('имя', ha['name'], hb['name']))
+    print('  %-13s %-8d %-8d' % ('длина', ha['declared_len'], hb['declared_len']))
+
+    same = sum(x == y for x, y in zip(ha['key'], hb['key']))
+    print()
+    print('== m_key ==')
+    print('  совпадают целиком: %s' % (ha['key'] == hb['key']))
+    print('  общих байт в тех же позициях: %d из %d' % (same, len(ha['key'])))
+
+    pa = a[ha['data_off']:ha['data_off'] + ha['declared_len']]
+    pb = b[hb['data_off']:hb['data_off'] + hb['declared_len']]
+    n = min(len(pa), len(pb))
+    prefix = next((i for i in range(n) if pa[i] != pb[i]), n)
+
+    print()
+    print('== ШИФРОТЕКСТЫ ==')
+    print('  первый блок A: %s' % pa[:16].hex())
+    print('  первый блок B: %s' % pb[:16].hex())
+    print('  общий префикс: %d байт' % prefix)
+
+    # Если гамма переиспользована (CTR/OFB с тем же ключом и IV), то
+    # C1 xor C2 = P1 xor P2, и энтропия XOR заметно просядет: два ZIP-архива
+    # дают куда менее случайный результат, чем два независимых шифротекста.
+    x = bytes(p ^ q for p, q in zip(pa[:n], pb[:n]))
+    e = entropy(x)
+    print()
+    print('== ПОВТОР ГАММЫ ==')
+    print('  энтропия XOR: %.4f из 8.0' % e)
+    print('  нулевых байт: %d из %d (при случайности ~%d)' % (x.count(0), n, n // 256))
+    print('  вывод: %s' % ('ГАММА ПОВТОРЯЕТСЯ — ключ и IV переиспользованы, '
+                           'нагрузку можно вскрыть без ключа'
+                           if e < 7.5 else
+                           'гамма не повторяется — у каждого пакета свой сеансовый ключ'))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -216,6 +266,11 @@ def main():
     sp.add_argument('--key-size', type=int, default=128)
     crypto(sp)
     sp.set_defaults(func=cmd_pack)
+
+    sp = sub.add_parser('compare', help='сравнить два контейнера')
+    sp.add_argument('file_a')
+    sp.add_argument('file_b')
+    sp.set_defaults(func=cmd_compare)
 
     args = p.parse_args()
     args.func(args)
