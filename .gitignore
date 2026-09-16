@@ -20,3 +20,7 @@ desktop.ini
 *.keystore
 *.jks
 *.pepk
+
+# Артефакты сборки приложения
+/app/build/
+/app/.cache/
