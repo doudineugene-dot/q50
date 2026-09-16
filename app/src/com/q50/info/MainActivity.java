@@ -98,7 +98,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         setContentView(root);
 
         // сразу пишем отчёт на флешку, без нажатия кнопки
-        autoSaveDir = UsbStorage.pickWritableDir();
+        autoSaveDir = Storage.pickWritableDir();
         autoSave(true);
     }
 
@@ -110,6 +110,8 @@ public class MainActivity extends Activity implements SensorEventListener {
         // CAN-датчики — первыми, чтобы их было видно и удобно фотографировать
         // без прокрутки. Это главное, ради чего снимается отчёт.
         can.appendTo(b);
+        RootProbe.appendTo(b);
+        Storage.appendDiagnostics(b);
 
         section(b, "СИСТЕМА");
         row(b, "Android", Build.VERSION.RELEASE);
@@ -179,7 +181,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         } else if (autoSaveDir != null) {
             b.append("\nФлешка: ").append(autoSaveDir.getAbsolutePath()).append('\n');
         }
-        b.append("\n--\nQ50 Info 1.5 · собрано под API 9\n");
+        b.append("\n--\nQ50 Info 1.6 · собрано под API 9\n");
         return b.toString();
     }
 
@@ -287,7 +289,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     /** Кнопка «Сохранить»: перезаписать отчёт на флешку прямо сейчас. */
     private void saveToFile() {
         if (autoSaveDir == null) {
-            autoSaveDir = UsbStorage.pickWritableDir();
+            autoSaveDir = Storage.pickWritableDir();
         }
         if (autoSaveDir == null) {
             toast("Флешка для записи не найдена. Вставьте USB (FAT32).");
@@ -318,24 +320,16 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     /** Записать текущий отчёт в q50-info.txt в указанном каталоге. */
     private boolean writeReport(File dir) {
-        File out = new File(dir, FILE_NAME);
-        OutputStreamWriter w = null;
         try {
-            w = new OutputStreamWriter(new FileOutputStream(out), "UTF-8");
-            w.write(report);
-            w.flush();
-            savedPath = out.getAbsolutePath();
-            return true;
-        } catch (Exception e) {
-            return false;
-        } finally {
-            if (w != null) {
-                try {
-                    w.close();
-                } catch (Exception ignored) {
-                }
+            byte[] data = report.getBytes("UTF-8");
+            if (Storage.write(dir, FILE_NAME, data)) {
+                savedPath = new File(dir, FILE_NAME).getAbsolutePath()
+                        + " (" + Storage.lastMethod + ")";
+                return true;
             }
+        } catch (Exception ignored) {
         }
+        return false;
     }
 
     @Override
