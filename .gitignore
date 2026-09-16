@@ -28,3 +28,6 @@ desktop.ini
 # Python
 __pycache__/
 *.pyc
+
+/build-out/
+keys/obu_key.pem

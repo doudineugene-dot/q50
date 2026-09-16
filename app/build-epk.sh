@@ -1,34 +1,23 @@
 #!/usr/bin/env bash
 #
-# Собрать APK и упаковать его в контейнер .epk для головного устройства Q50.
+# Собрать APK и упаковать его в загружаемый .epk для головного устройства Q50.
 #
-# ГУ не распознаёт голый APK — установить приложение можно только как .epk.
-# Для сборки принимаемого устройством пакета нужен ОТКРЫТЫЙ ключ RSA из
-# прошивки ГУ (см. docs/epk-format.md). Без него скрипт всё равно соберёт
-# .epk, но с нулевым m_key — устройство такой пакет отвергнет; это годится
-# лишь чтобы проверить сам факт приёма формата.
+# ГУ не распознаёт голый APK — только .epk. Для сборки нужен ПУБЛИЧНЫЙ
+# сертификат OBU (закрытый ключ не нужен). По умолчанию берётся включённый
+# ../keys/obu_cert.pem; свой задаётся через Q50_OBU_CERT.
 #
 set -euo pipefail
 cd "$(dirname "$0")"
 
-RSA_PUB="${Q50_OBU_CERT:-${Q50_RSA_PUB:-}}"   # публичный сертификат OBU (PEM/DER)
-MODE="${Q50_EPK_MODE:-cbc}"          # режим AES (уточнить по прошивке)
-NAME="${Q50_EPK_NAME:-q50info.apk}"  # имя вложенного файла в заголовке
+CERT="${Q50_OBU_CERT:-../keys/obu_cert.pem}"
 
 ./build.sh
 APK="build/$(ls -t build | grep -E '^q50info-.*\.apk$' | head -1)"
-OUT="build/q50info.epk"
+OUT="build/$(basename "${APK%.apk}").epk"
 
 echo
-echo "==> Упаковка $APK -> $OUT"
-if [ -n "$RSA_PUB" ]; then
-    python3 ../tools/epktool.py pack "$APK" -o "$OUT" \
-        --name "$NAME" --rsa-pub "$RSA_PUB" --mode "$MODE"
-else
-    echo "    Q50_RSA_PUB не задан — m_key будет нулевым, устройство отвергнет пакет."
-    python3 ../tools/epktool.py pack "$APK" -o "$OUT" --name "$NAME"
-fi
-
+echo "==> Упаковка $APK -> $OUT сертификатом $CERT"
+python3 ../tools/epktool.py build "$APK" -o "$OUT" --cert "$CERT"
 echo
-python3 ../tools/epktool.py info "$OUT" | sed -n '3,16p'
-echo "==> Готово: $OUT"
+python3 ../tools/epktool.py info "$OUT"
+echo "==> Готово: $OUT — скопировать в корень USB (FAT32), выбрать в AppManager."
