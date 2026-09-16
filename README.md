@@ -13,6 +13,9 @@
 | [`apk/`](apk/) | Сами `.apk`-файлы |
 | [`docs/install.md`](docs/install.md) | Как залить и установить пакет на ГУ |
 | [`app/`](app/) | Исходники **Q50 Info** — своего приложения под API 9 |
+| [`tools/`](tools/) | `epktool.py` — разбор/сборка `.epk`; `certscan.py` — поиск сертификатов |
+| [`docs/epk-format.md`](docs/epk-format.md) | Формат `.epk` и схема шифрования |
+| [`docs/find-obu-cert.md`](docs/find-obu-cert.md) | Где искать сертификат OBU для сборки `.epk` |
 
 ## Моя система
 

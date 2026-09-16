@@ -150,12 +150,13 @@ public class MainActivity extends Activity {
                 ? "есть" : "нет (в Android 2.3 USB Host API отсутствует)");
 
         CanProbe.appendTo(b);
+        CertProbe.appendTo(b);
 
         section(b, "ЛОКАЛЬ");
         row(b, "Язык", Locale.getDefault().toString());
         row(b, "Часовой пояс", TimeZone.getDefault().getID());
 
-        b.append("\n--\nQ50 Info 1.1 · собрано под API 9\n");
+        b.append("\n--\nQ50 Info 1.2 · собрано под API 9\n");
         return b.toString();
     }
 
