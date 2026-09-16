@@ -44,6 +44,9 @@ public class MainActivity extends Activity implements SensorEventListener {
     private CanSensors can;
     private TextView textView;
     private long lastRefresh;
+    private long lastAutoSave;
+    private File autoSaveDir;
+    private String savedPath;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -93,6 +96,10 @@ public class MainActivity extends Activity implements SensorEventListener {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         setContentView(root);
+
+        // сразу пишем отчёт на флешку, без нажатия кнопки
+        autoSaveDir = UsbStorage.pickWritableDir();
+        autoSave(true);
     }
 
     // ------------------------------------------------------------------ отчёт
@@ -164,7 +171,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         row(b, "Язык", Locale.getDefault().toString());
         row(b, "Часовой пояс", TimeZone.getDefault().getID());
 
-        b.append("\n--\nQ50 Info 1.3 · собрано под API 9\n");
+        if (savedPath != null) {
+            b.append("\nФайл сохраняется на: ").append(savedPath).append('\n');
+        } else if (autoSaveDir != null) {
+            b.append("\nФлешка: ").append(autoSaveDir.getAbsolutePath()).append('\n');
+        }
+        b.append("\n--\nQ50 Info 1.4 · собрано под API 9\n");
         return b.toString();
     }
 
@@ -269,21 +281,50 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
     }
 
+    /** Кнопка «Сохранить»: перезаписать отчёт на флешку прямо сейчас. */
     private void saveToFile() {
-        String state = Environment.getExternalStorageState();
-        if (!Environment.MEDIA_MOUNTED.equals(state)) {
-            toast("Накопитель не подключён для записи (" + state + ")");
+        if (autoSaveDir == null) {
+            autoSaveDir = UsbStorage.pickWritableDir();
+        }
+        if (autoSaveDir == null) {
+            toast("Флешка для записи не найдена. Вставьте USB (FAT32).");
             return;
         }
-        File out = new File(Environment.getExternalStorageDirectory(), FILE_NAME);
+        if (writeReport(autoSaveDir)) {
+            toast("Сохранено: " + savedPath);
+        } else {
+            toast("Не удалось записать на " + autoSaveDir.getAbsolutePath());
+        }
+    }
+
+    /** Автозапись: тихо, без всплывающих сообщений (кроме первого раза). */
+    private void autoSave(boolean announce) {
+        if (autoSaveDir == null) {
+            if (announce) {
+                toast("Флешка не найдена — файл не записан. Вставьте USB (FAT32).");
+            }
+            return;
+        }
+        boolean ok = writeReport(autoSaveDir);
+        lastAutoSave = System.currentTimeMillis();
+        if (announce) {
+            toast(ok ? ("Файл на флешке: " + savedPath)
+                     : ("Не удалось записать на " + autoSaveDir.getAbsolutePath()));
+        }
+    }
+
+    /** Записать текущий отчёт в q50-info.txt в указанном каталоге. */
+    private boolean writeReport(File dir) {
+        File out = new File(dir, FILE_NAME);
         OutputStreamWriter w = null;
         try {
             w = new OutputStreamWriter(new FileOutputStream(out), "UTF-8");
             w.write(report);
             w.flush();
-            toast("Сохранено: " + out.getAbsolutePath());
+            savedPath = out.getAbsolutePath();
+            return true;
         } catch (Exception e) {
-            toast("Не удалось записать: " + e.getMessage());
+            return false;
         } finally {
             if (w != null) {
                 try {
@@ -300,7 +341,6 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (can != null && can.manager() != null && can.sensors() != null) {
             for (int i = 0; i < can.sensors().size(); i++) {
                 try {
-                    // 200000 мкс = ~5 Гц, как в референсе; поток данных не душит UI
                     can.manager().registerListener(this, can.sensors().get(i), 200000);
                 } catch (Throwable ignored) {
                 }
@@ -317,6 +357,9 @@ public class MainActivity extends Activity implements SensorEventListener {
             } catch (Throwable ignored) {
             }
         }
+        // зафиксировать последние данные при выходе
+        report = buildReport();
+        autoSave(false);
     }
 
     public void onSensorChanged(SensorEvent e) {
@@ -324,7 +367,6 @@ public class MainActivity extends Activity implements SensorEventListener {
             return;
         }
         can.update(e.sensor, e.values);
-        // перерисовываем отчёт не чаще двух раз в секунду
         long now = System.currentTimeMillis();
         if (now - lastRefresh < 500) {
             return;
@@ -333,6 +375,10 @@ public class MainActivity extends Activity implements SensorEventListener {
         report = buildReport();
         if (textView != null) {
             textView.setText(report);
+        }
+        // держим файл на флешке свежим, но не насилуем флеш-память
+        if (now - lastAutoSave >= 3000) {
+            autoSave(false);
         }
     }
 
