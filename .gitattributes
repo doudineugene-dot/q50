@@ -1,0 +1,8 @@
+# APK — бинарники. Требуется `git lfs install` на клиенте, иначе правило не сработает.
+*.apk filter=lfs diff=lfs merge=lfs -text
+
+# Не считать бинарные форматы текстом при diff и нормализации переводов строк
+*.zip  binary
+*.jar  binary
+*.img  binary
+*.bin  binary

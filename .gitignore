@@ -1,0 +1,22 @@
+# Мусор ОС
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Временные и рабочие файлы
+*.tmp
+*.part
+*.download
+*.crdownload
+/tmp/
+/scratch/
+
+# Распакованные APK и следы декомпиляции
+*.apk.idsig
+/unpacked/
+/decompiled/
+
+# Ключи подписи — не должны попасть в репозиторий
+*.keystore
+*.jks
+*.pepk
