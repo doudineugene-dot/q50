@@ -107,6 +107,10 @@ public class MainActivity extends Activity implements SensorEventListener {
     private String buildReport() {
         StringBuilder b = new StringBuilder();
 
+        // CAN-датчики — первыми, чтобы их было видно и удобно фотографировать
+        // без прокрутки. Это главное, ради чего снимается отчёт.
+        can.appendTo(b);
+
         section(b, "СИСТЕМА");
         row(b, "Android", Build.VERSION.RELEASE);
         row(b, "API level", String.valueOf(Build.VERSION.SDK_INT));
@@ -165,7 +169,6 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         CanProbe.appendTo(b);
         CertProbe.appendTo(b);
-        can.appendTo(b);
 
         section(b, "ЛОКАЛЬ");
         row(b, "Язык", Locale.getDefault().toString());
@@ -176,7 +179,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         } else if (autoSaveDir != null) {
             b.append("\nФлешка: ").append(autoSaveDir.getAbsolutePath()).append('\n');
         }
-        b.append("\n--\nQ50 Info 1.4 · собрано под API 9\n");
+        b.append("\n--\nQ50 Info 1.5 · собрано под API 9\n");
         return b.toString();
     }
 

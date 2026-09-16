@@ -99,14 +99,16 @@ final class CanSensors {
             if (val != null) {
                 live++;
             }
-            String line = "  [t" + s.getType() + "] " + s.getName()
-                    + " (" + s.getVendor() + ")"
-                    + (val == null ? "" : " = " + val) + "\n";
             if (isVehicle(s)) {
                 vehicle++;
-                veh.append(line);
+                veh.append("  ").append(vehicle).append(". t")
+                   .append(s.getType()).append(" ").append(s.getName())
+                   .append(val == null ? "  (нет данных)" : " = " + val)
+                   .append('\n');
             } else {
-                other.append(line);
+                other.append("  t").append(s.getType()).append(" ")
+                     .append(s.getName()).append(" (").append(s.getVendor()).append(")")
+                     .append(val == null ? "" : " = " + val).append('\n');
             }
         }
 
