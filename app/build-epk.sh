@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-RSA_PUB="${Q50_RSA_PUB:-}"          # открытый ключ IVI в PEM, если есть
+RSA_PUB="${Q50_OBU_CERT:-${Q50_RSA_PUB:-}}"   # публичный сертификат OBU (PEM/DER)
 MODE="${Q50_EPK_MODE:-cbc}"          # режим AES (уточнить по прошивке)
 NAME="${Q50_EPK_NAME:-q50info.apk}"  # имя вложенного файла в заголовке
 

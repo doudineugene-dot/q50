@@ -128,6 +128,28 @@ def unwrap_private(wrapped, pem_path, padding_name):
     return key
 
 
+def load_public(path):
+    """Открытый ключ RSA из чего угодно: голый ключ или X.509-сертификат,
+    PEM или DER. Публичный сертификат OBU — это X.509, ключ внутри него."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography import x509
+    raw = open(path, 'rb').read()
+    loaders = [
+        serialization.load_pem_public_key,
+        serialization.load_der_public_key,
+        lambda d: x509.load_pem_x509_certificate(d).public_key(),
+        lambda d: x509.load_der_x509_certificate(d).public_key(),
+    ]
+    errors = []
+    for load in loaders:
+        try:
+            return load(raw)
+        except Exception as e:
+            errors.append(str(e).splitlines()[0])
+    sys.exit('не удалось прочитать открытый ключ из %s:\n  %s'
+             % (path, '\n  '.join(errors)))
+
+
 def unwrap_public(wrapped, pem_path):
     """Разворот ОТКРЫТЫМ ключом — сырая операция RSA.
 
@@ -136,8 +158,7 @@ def unwrap_public(wrapped, pem_path):
     открытый ключ лежит в прошивке ГУ, и этого достаточно, чтобы расшифровать
     чужой пакет. Библиотека такую операцию не предоставляет, считаем вручную.
     """
-    from cryptography.hazmat.primitives import serialization
-    pub = serialization.load_pem_public_key(open(pem_path, 'rb').read())
+    pub = load_public(pem_path)
     n = pub.public_numbers().n
     e = pub.public_numbers().e
     size = (n.bit_length() + 7) // 8
@@ -149,9 +170,8 @@ def unwrap_public(wrapped, pem_path):
 
 def wrap_public(key, pem_path):
     """Завернуть сеансовый ключ открытым ключом — для сборки своего пакета."""
-    from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import padding as pad
-    pub = serialization.load_pem_public_key(open(pem_path, 'rb').read())
+    pub = load_public(pem_path)
     return pub.encrypt(key, pad.PKCS1v15())
 
 
@@ -294,8 +314,10 @@ def main():
     def crypto(sp):
         sp.add_argument('--key', help='симметричный ключ AES в hex, если он уже известен')
         sp.add_argument('--rsa-key', help='ЗАКРЫТЫЙ ключ RSA (PEM): разворот m_key')
-        sp.add_argument('--rsa-pub', help='ОТКРЫТЫЙ ключ RSA (PEM): разворот сырой '
-                                          'операцией RSA при извлечении, заворот при сборке')
+        sp.add_argument('--rsa-pub', help='открытый ключ RSA или X.509-сертификат '
+                                          '(PEM/DER) — например публичный сертификат '
+                                          'OBU: заворот при сборке, сырой разворот '
+                                          'при извлечении')
         sp.add_argument('--rsa-padding', default='pkcs1v15', choices=['pkcs1v15', 'oaep'])
         sp.add_argument('--iv', help='IV в hex, по умолчанию нули')
         sp.add_argument('--mode', default='cbc', choices=['cbc', 'ecb', 'ctr', 'cfb', 'ofb'])
