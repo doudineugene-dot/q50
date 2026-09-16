@@ -2,7 +2,9 @@ package com.q50.info;
 
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.bluetooth.BluetoothAdapter;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -137,11 +139,23 @@ public class MainActivity extends Activity {
             row(b, "Внешняя", "не подключена (" + Environment.getExternalStorageState() + ")");
         }
 
+        section(b, "ТРАНСПОРТЫ ДО CAN");
+        row(b, "Bluetooth", bluetooth());
+        row(b, "WiFi", getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI)
+                ? "есть" : "нет");
+        // FEATURE_USB_HOST как константа появилась только в API 12 — здесь строкой.
+        // На Android 2.3 USB Host API нет, так что ответ заведомо «нет»; выводим
+        // явно, чтобы не было соблазна рассчитывать на USB-донгл.
+        row(b, "USB Host", getPackageManager().hasSystemFeature("android.hardware.usb.host")
+                ? "есть" : "нет (в Android 2.3 USB Host API отсутствует)");
+
+        CanProbe.appendTo(b);
+
         section(b, "ЛОКАЛЬ");
         row(b, "Язык", Locale.getDefault().toString());
         row(b, "Часовой пояс", TimeZone.getDefault().getID());
 
-        b.append("\n--\nQ50 Info 1.0 · собрано под API 9\n");
+        b.append("\n--\nQ50 Info 1.1 · собрано под API 9\n");
         return b.toString();
     }
 
@@ -183,6 +197,20 @@ public class MainActivity extends Activity {
             return v == 1 ? "разрешены" : "ЗАПРЕЩЕНЫ — включить перед установкой";
         } catch (Exception e) {
             return "не удалось прочитать";
+        }
+    }
+
+    private String bluetooth() {
+        try {
+            BluetoothAdapter a = BluetoothAdapter.getDefaultAdapter();
+            if (a == null) {
+                return "адаптера нет";
+            }
+            // getName() и isEnabled() требуют разрешения BLUETOOTH — оно в манифесте.
+            return "есть, " + (a.isEnabled() ? "включён" : "выключен")
+                    + ", имя: " + a.getName();
+        } catch (Exception e) {
+            return "не опросить (" + e.getClass().getSimpleName() + ")";
         }
     }
 

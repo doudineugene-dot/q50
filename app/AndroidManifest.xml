@@ -1,14 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.q50.info"
-    android:versionCode="1"
-    android:versionName="1.0">
+    android:versionCode="2"
+    android:versionName="1.1">
 
     <!-- Android 2.3.0 = API 9. targetSdk 10 — максимум, который знает SDK 2.3.3 -->
     <uses-sdk android:minSdkVersion="9" android:targetSdkVersion="10" />
 
     <!-- для кнопки «Сохранить в файл» -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <!-- для опроса Bluetooth-адаптера как запасного пути до шины -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+
+    <!-- Всё это приложение как раз и выясняет, что на устройстве есть, поэтому
+         ничего не должно быть обязательным для установки. Без явного
+         required="false" aapt выводит android.hardware.bluetooth из разрешения
+         BLUETOOTH как обязательный, а touchscreen считается обязательным по
+         умолчанию — головное устройство может управляться шайбой. -->
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
         android:label="@string/app_name"
