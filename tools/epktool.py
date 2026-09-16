@@ -105,16 +105,54 @@ def cmd_info(args):
     print('  повторы бл.   = %d %s' % (dups, '(ECB)' if dups > 10 else '(не ECB)'))
 
 
-def unwrap_key(wrapped, pem_path, padding_name):
-    """Развернуть симметричный ключ закрытым ключом RSA из прошивки."""
+def _strip_pkcs1(block):
+    """Снять добивку PKCS#1 v1.5: 00 BT <добивка> 00 <данные>, BT = 01 или 02."""
+    if block[0] != 0 or block[1] not in (1, 2):
+        raise ValueError('не похоже на PKCS#1 v1.5: первые байты %s' % block[:2].hex())
+    sep = block.index(b'\x00', 2)
+    return block[sep + 1:]
+
+
+def unwrap_private(wrapped, pem_path, padding_name):
+    """Разворот закрытым ключом — обычная гибридная схема.
+
+    Подходит, если ГУ хранит ЗАКРЫТЫЙ ключ и сам расшифровывает m_key.
+    """
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import padding as pad
     priv = serialization.load_pem_private_key(open(pem_path, 'rb').read(), password=None)
     scheme = (pad.PKCS1v15() if padding_name == 'pkcs1v15'
               else pad.OAEP(mgf=pad.MGF1(hashes.SHA1()), algorithm=hashes.SHA1(), label=None))
     key = priv.decrypt(wrapped, scheme)
-    print('ключ развёрнут: %d байт (AES-%d)' % (len(key), len(key) * 8))
+    print('ключ развёрнут закрытым ключом: %d байт (AES-%d)' % (len(key), len(key) * 8))
     return key
+
+
+def unwrap_public(wrapped, pem_path):
+    """Разворот ОТКРЫТЫМ ключом — сырая операция RSA.
+
+    Встречается во встраиваемых системах: упаковщик «подписывает» сеансовый
+    ключ закрытым ключом, а устройство разворачивает его открытым. Тогда
+    открытый ключ лежит в прошивке ГУ, и этого достаточно, чтобы расшифровать
+    чужой пакет. Библиотека такую операцию не предоставляет, считаем вручную.
+    """
+    from cryptography.hazmat.primitives import serialization
+    pub = serialization.load_pem_public_key(open(pem_path, 'rb').read())
+    n = pub.public_numbers().n
+    e = pub.public_numbers().e
+    size = (n.bit_length() + 7) // 8
+    m = pow(int.from_bytes(wrapped, 'big'), e, n)
+    key = _strip_pkcs1(m.to_bytes(size, 'big'))
+    print('ключ развёрнут открытым ключом: %d байт (AES-%d)' % (len(key), len(key) * 8))
+    return key
+
+
+def wrap_public(key, pem_path):
+    """Завернуть сеансовый ключ открытым ключом — для сборки своего пакета."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import padding as pad
+    pub = serialization.load_pem_public_key(open(pem_path, 'rb').read())
+    return pub.encrypt(key, pad.PKCS1v15())
 
 
 def aes(body, key, mode_name, iv, encrypt):
@@ -129,7 +167,9 @@ def aes(body, key, mode_name, iv, encrypt):
 
 def resolve_key(h, args):
     if args.rsa_key:
-        return unwrap_key(h['key'], args.rsa_key, args.rsa_padding)
+        return unwrap_private(h['key'], args.rsa_key, args.rsa_padding)
+    if args.rsa_pub:
+        return unwrap_public(h['key'], args.rsa_pub)
     if args.key:
         return bytes.fromhex(args.key)
     return None
@@ -159,13 +199,22 @@ def cmd_extract(args):
 
 
 def cmd_pack(args):
+    import os
     payload = open(args.file, 'rb').read()
-    if args.key:
-        key = bytes.fromhex(args.key)
+
+    wrapped = b''
+    key = bytes.fromhex(args.key) if args.key else None
+    if args.rsa_pub and not key:
+        key = os.urandom(args.aes_bytes)   # сеансовый ключ, свой на каждый пакет
+    if key:
         if args.mode in ('cbc', 'ecb') and len(payload) % 16:
             payload += b'\x00' * (16 - len(payload) % 16)
         payload = aes(payload, key, args.mode,
                       bytes.fromhex(args.iv) if args.iv else b'\x00' * 16, encrypt=True)
+        if args.rsa_pub:
+            wrapped = wrap_public(key, args.rsa_pub)
+            print('сеансовый ключ AES-%d завёрнут в RSA (%d байт)'
+                  % (len(key) * 8, len(wrapped)))
 
     name = (args.name or args.file.split('/')[-1]).encode('ascii')
     if len(name) >= NAME_FIELD:
@@ -173,16 +222,18 @@ def cmd_pack(args):
 
     out = bytearray(ENVELOPE_SIZE + NAME_FIELD + 4)
     out[0:4] = MAGIC
-    struct.pack_into('>HHHH', out, 4, args.version, args.payload_type, 1, args.key_size)
-    # m_key оставляем нулевым: завернуть симметричный ключ можно только
-    # ОТКРЫТЫМ ключом IVI, которого нет.
+    struct.pack_into('>HHHH', out, 4, args.version, args.payload_type, 1,
+                     len(wrapped) or args.key_size)
+    if wrapped:
+        out[OFF_KEY:OFF_KEY + len(wrapped)] = wrapped
     out[ENVELOPE_SIZE:ENVELOPE_SIZE + len(name)] = name
     struct.pack_into('>I', out, ENVELOPE_SIZE + NAME_FIELD, len(payload))
 
     open(args.output, 'wb').write(bytes(out) + payload)
     print('собрано %s: заголовок %d + нагрузка %d = %d байт'
           % (args.output, len(out), len(payload), len(out) + len(payload)))
-    print('ВНИМАНИЕ: поле m_key нулевое. Устройство почти наверняка отвергнет пакет.')
+    if not wrapped:
+        print('ВНИМАНИЕ: поле m_key нулевое — без --rsa-pub устройство пакет отвергнет.')
 
 
 def cmd_compare(args):
@@ -242,7 +293,9 @@ def main():
 
     def crypto(sp):
         sp.add_argument('--key', help='симметричный ключ AES в hex, если он уже известен')
-        sp.add_argument('--rsa-key', help='закрытый ключ RSA (PEM) для разворота m_key')
+        sp.add_argument('--rsa-key', help='ЗАКРЫТЫЙ ключ RSA (PEM): разворот m_key')
+        sp.add_argument('--rsa-pub', help='ОТКРЫТЫЙ ключ RSA (PEM): разворот сырой '
+                                          'операцией RSA при извлечении, заворот при сборке')
         sp.add_argument('--rsa-padding', default='pkcs1v15', choices=['pkcs1v15', 'oaep'])
         sp.add_argument('--iv', help='IV в hex, по умолчанию нули')
         sp.add_argument('--mode', default='cbc', choices=['cbc', 'ecb', 'ctr', 'cfb', 'ofb'])
@@ -264,6 +317,8 @@ def main():
     sp.add_argument('--version', type=int, default=2)
     sp.add_argument('--payload-type', type=int, default=2)
     sp.add_argument('--key-size', type=int, default=128)
+    sp.add_argument('--aes-bytes', type=int, default=16, choices=[16, 24, 32],
+                    help='длина сеансового ключа AES при сборке')
     crypto(sp)
     sp.set_defaults(func=cmd_pack)
 
