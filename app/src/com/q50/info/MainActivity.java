@@ -2,6 +2,9 @@ package com.q50.info;
 
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
 import android.bluetooth.BluetoothAdapter;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -33,25 +36,29 @@ import java.util.TimeZone;
  * Собирается под API 9 (Android 2.3.0), поэтому здесь нет ни AndroidX, ни
  * support-library, ни XML-разметки — только то, что существует в 2.3.
  */
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements SensorEventListener {
 
     private static final String FILE_NAME = "q50-info.txt";
 
     private String report;
+    private CanSensors can;
+    private TextView textView;
+    private long lastRefresh;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        can = new CanSensors(this);
         report = buildReport();
 
-        TextView text = new TextView(this);
-        text.setText(report);
-        text.setTextSize(15);
-        text.setPadding(16, 16, 16, 16);
+        textView = new TextView(this);
+        textView.setText(report);
+        textView.setTextSize(15);
+        textView.setPadding(16, 16, 16, 16);
 
         ScrollView scroll = new ScrollView(this);
-        scroll.addView(text);
+        scroll.addView(textView);
 
         Button copy = new Button(this);
         copy.setText("Копировать");
@@ -151,12 +158,13 @@ public class MainActivity extends Activity {
 
         CanProbe.appendTo(b);
         CertProbe.appendTo(b);
+        can.appendTo(b);
 
         section(b, "ЛОКАЛЬ");
         row(b, "Язык", Locale.getDefault().toString());
         row(b, "Часовой пояс", TimeZone.getDefault().getID());
 
-        b.append("\n--\nQ50 Info 1.2 · собрано под API 9\n");
+        b.append("\n--\nQ50 Info 1.3 · собрано под API 9\n");
         return b.toString();
     }
 
@@ -284,6 +292,51 @@ public class MainActivity extends Activity {
                 }
             }
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (can != null && can.manager() != null && can.sensors() != null) {
+            for (int i = 0; i < can.sensors().size(); i++) {
+                try {
+                    // 200000 мкс = ~5 Гц, как в референсе; поток данных не душит UI
+                    can.manager().registerListener(this, can.sensors().get(i), 200000);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (can != null && can.manager() != null) {
+            try {
+                can.manager().unregisterListener(this);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    public void onSensorChanged(SensorEvent e) {
+        if (can == null) {
+            return;
+        }
+        can.update(e.sensor, e.values);
+        // перерисовываем отчёт не чаще двух раз в секунду
+        long now = System.currentTimeMillis();
+        if (now - lastRefresh < 500) {
+            return;
+        }
+        lastRefresh = now;
+        report = buildReport();
+        if (textView != null) {
+            textView.setText(report);
+        }
+    }
+
+    public void onAccuracyChanged(Sensor s, int a) {
     }
 
     private void toast(String msg) {
