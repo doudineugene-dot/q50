@@ -24,3 +24,7 @@ desktop.ini
 # Артефакты сборки приложения
 /app/build/
 /app/.cache/
+
+# Python
+__pycache__/
+*.pyc
