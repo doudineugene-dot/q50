@@ -31,3 +31,5 @@ __pycache__/
 
 /build-out/
 keys/obu_key.pem
+
+/dash/build/
