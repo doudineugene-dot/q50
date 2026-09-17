@@ -50,7 +50,7 @@ final class Storage {
         Map<String, String> out = new LinkedHashMap<String, String>();
         collectMounts(readFile("/proc/mounts"), out);
         // через su можно увидеть смонтированное, скрытое от обычного процесса
-        collectMounts(runSu("cat /proc/mounts"), out);
+        collectMounts(Root.run("cat /proc/mounts"), out);
         return out;
     }
 
@@ -120,7 +120,7 @@ final class Storage {
         } finally {
             close(o);
         }
-        if (writeViaSu(out.getAbsolutePath(), data)) {
+        if (Root.writeFile(out.getAbsolutePath(), data)) {
             lastMethod = "через su (root)";
             return true;
         }
@@ -144,8 +144,8 @@ final class Storage {
             }
         }
         // прямой записи нет — пробуем root
-        if (writeViaSu(probe.getAbsolutePath(), new byte[]{'q'})) {
-            runSu("rm -f " + probe.getAbsolutePath());
+        if (Root.writeFile(probe.getAbsolutePath(), new byte[]{'q'})) {
+            Root.run("rm -f " + probe.getAbsolutePath());
             return true;
         }
         return false;
@@ -153,54 +153,13 @@ final class Storage {
 
     // ------------------------------------------------------------------ su
 
-    /** Записать файл через su: su -c "cat > путь". */
-    private static boolean writeViaSu(String path, byte[] data) {
-        Process p = null;
-        try {
-            p = new ProcessBuilder("su", "-c", "cat > " + path).start();
-            OutputStream os = p.getOutputStream();
-            os.write(data);
-            os.flush();
-            os.close();
-            return p.waitFor() == 0;
-        } catch (Exception e) {
-            return false;
-        } finally {
-            if (p != null) {
-                p.destroy();
-            }
-        }
-    }
 
-    /** Выполнить команду через su, вернуть stdout (или null). */
-    private static String runSu(String cmd) {
-        Process p = null;
-        BufferedReader r = null;
-        try {
-            p = new ProcessBuilder("su", "-c", cmd).start();
-            r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = r.readLine()) != null) {
-                sb.append(line).append('\n');
-            }
-            p.waitFor();
-            return sb.toString();
-        } catch (Exception e) {
-            return null;
-        } finally {
-            close(r);
-            if (p != null) {
-                p.destroy();
-            }
-        }
-    }
 
     // ------------------------------------------------------- диагностика
 
     static void appendDiagnostics(StringBuilder b) {
         b.append('\n').append("== НАКОПИТЕЛИ ==\n");
-        boolean root = runSu("id") != null;
+        boolean root = Root.available();
         b.append("Root для записи: ").append(root ? "доступен" : "нет").append('\n');
 
         List<File> c = candidates();
