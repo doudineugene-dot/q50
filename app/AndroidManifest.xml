@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.q50.info"
-    android:versionCode="8"
-    android:versionName="1.7">
+    android:versionCode="9"
+    android:versionName="1.8">
 
     <!-- Android 2.3.0 = API 9. targetSdk 10 — максимум, который знает SDK 2.3.3 -->
     <uses-sdk android:minSdkVersion="9" android:targetSdkVersion="10" />

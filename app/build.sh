@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PKG_NAME="q50info"
-VERSION="1.7"
+VERSION="1.8"
 MIN_SDK=9
 
 BUILD_DIR="build"

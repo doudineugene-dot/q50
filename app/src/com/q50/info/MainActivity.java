@@ -181,7 +181,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         } else if (autoSaveDir != null) {
             b.append("\nФлешка: ").append(autoSaveDir.getAbsolutePath()).append('\n');
         }
-        b.append("\n--\nQ50 Info 1.7 · собрано под API 9\n");
+        b.append("\n--\nQ50 Info 1.8 · собрано под API 9\n");
         return b.toString();
     }
 

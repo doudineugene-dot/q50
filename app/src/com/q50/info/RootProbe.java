@@ -1,49 +1,61 @@
 package com.q50.info;
 
 /**
- * Разведка с root: как ГУ читает CAN и где реально смонтирована флешка.
+ * Глубокое извлечение с root: полный список сигналов VS_ID из прошивки и канал,
+ * через который служба ГУ читает CAN.
  *
- * Команды выполняются через Root.run() (su читает их со stdin) — прежний
- * `su -c "cmd"` на этом устройстве падал с "exec failed".
+ * Команды идут через Root.run() (su читает их со stdin).
  */
 final class RootProbe {
 
-    private static final int MAX = 1100;
-    private static final String KEYS =
-            "can|vehicle|ivi|ygomi|connexis|vsig|vs_|obd|diag|kwp|mcu|adcm|adp";
+    private static final int MAX = 1600;
+    private static final String SVC =
+            "ygomi|connexis|vehicle|\\bivi\\b|vsig|candec|canrx|vs_svc|adcm";
 
     private RootProbe() {
     }
 
     static void appendTo(StringBuilder b) {
-        b.append('\n').append("== РАЗВЕДКА CAN (root) ==\n");
-
+        b.append('\n').append("== ИЗВЛЕЧЕНИЕ (root) ==\n");
         if (!Root.available()) {
             b.append("Root приложению не выдан — раздел пропущен.\n");
             return;
         }
         b.append("Root: есть\n");
 
-        // Служба, читающая шину
-        dump(b, "Процессы", Root.run("ps | grep -iE '" + KEYS + "'"));
-        dump(b, "Сервисы", Root.run("service list 2>/dev/null | grep -iE '" + KEYS + "'"));
+        // ГЛАВНОЕ: полный список имён сигналов, зашитых в прошивку.
+        // -a: читать бинарные jar/so как текст (строки VS_ID лежат в dex).
+        dump(b, "ПОЛНЫЙ СПИСОК VS_ID из прошивки",
+                Root.run("grep -rhoaE 'VS_ID_[A-Z0-9_]+' "
+                        + "/system/framework /system/app /system/lib /vendor 2>/dev/null "
+                        + "| sort -u"));
 
-        // Каналы к шине
-        dump(b, "/dev (can/spi/адаптеры)",
-                Root.run("ls -l /dev 2>/dev/null | grep -iE 'can|spi|vehicle|ttyAdp|ttyPCH|mcu|adcm'"));
-        dump(b, "Все узлы /dev (кратко)",
+        // Где именно они лежат (какой jar/apk/so декодирует шину)
+        dump(b, "Файлы, содержащие VS_ID",
+                Root.run("grep -rlaE 'VS_ID_' /system/framework /system/app /system/lib "
+                        + "/vendor 2>/dev/null | head -8"));
+
+        // Служба, читающая шину, и её PID
+        dump(b, "Процесс службы",
+                Root.run("ps | grep -iE '" + SVC + "'"));
+
+        // Канал: открытые дескрипторы службы -> устройство/сокет шины
+        dump(b, "Канал службы (fd)",
+                Root.run("for pp in $(ps | grep -iE '" + SVC
+                        + "' | awk '{print $2}'); do echo PID $pp:; "
+                        + "ls -l /proc/$pp/fd 2>/dev/null "
+                        + "| grep -iE 'can|/dev/|socket|tty|spi'; done"));
+
+        // Что за узлы вообще есть в /dev
+        dump(b, "Узлы /dev",
                 Root.run("ls /dev 2>/dev/null | tr '\\n' ' '"));
-        dump(b, "Unix-сокеты службы",
-                Root.run("cat /proc/net/unix 2>/dev/null | grep -iE '" + KEYS + "'"));
-        dump(b, "getprop (can/vehicle)",
-                Root.run("getprop 2>/dev/null | grep -iE '" + KEYS + "'"));
 
-        // Где вендорская логика и полный список сигналов
-        dump(b, "Файлы с VS_ID",
-                Root.run("grep -rl VS_ID /system 2>/dev/null | head -8"));
+        // Сервисы и сокеты
+        dump(b, "Сервисы",
+                Root.run("service list 2>/dev/null | grep -iE 'vehicle|can|ivi|ygomi'"));
 
-        // Где смонтирована флешка — полный список
-        dump(b, "Точки монтирования",
+        // Точки монтирования — найти флешку
+        dump(b, "Монтирование",
                 Root.run("cat /proc/mounts 2>/dev/null"));
     }
 
@@ -55,7 +67,7 @@ final class RootProbe {
         }
         String t = out.trim();
         if (t.length() > MAX) {
-            t = t.substring(0, MAX) + "…";
+            t = t.substring(0, MAX) + "\n  …(обрезано)";
         }
         String[] lines = t.split("\n");
         for (int i = 0; i < lines.length; i++) {
